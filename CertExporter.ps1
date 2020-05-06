@@ -38,6 +38,9 @@ $AdfsServer = $config.AdfsServer
 $RulesServer = $config.RulesServer
 $WugServer = $config.WugServer
 $CrmWebHookServer = $config.CrmWebHookServer
+$OriginEmail = $config.OriginEmail
+$TargetEmail = $config.TargetEmail
+
 
 # Creating error variables that will be used at the end
 $Script:ExportSSWCertError = $false
@@ -104,8 +107,10 @@ function Export-SSWCert {
         $item | foreach { $NewCertName = $item.Subject.Substring(3, 10) + "-From" + $_.NotBefore.ToString("dd-MM-yyyy") + "-To" + $_.NotAfter.ToString("dd-MM-yyyy") + ".pfx" }
         $item | foreach { Export-PfxCertificate -cert $_ -FilePath "$CertFolder\$NewCertName" -Password $mypwd -NoClobber }    
         $SSWThumbprint = $item.Thumbprint 
+
         Set-Content -Path $CertThumbprint -Value $SSWThumbprint
         Set-Content -Path $CertName -Value $NewCertName
+
         Write-Log -File $LogFile -Message "Certificate thumbprint $SSWThumbprint and name $NewCertName exported to $CertThumbprint and $CertName..."
     }
     catch {
@@ -312,10 +317,10 @@ function Set-AdfsCert {
 
 <#
 .SYNOPSIS
-Set the new exported certificate to be the SSW Rules page server (rules.ssw.com.au) certificate.
+Set the new exported certificate to be the SSW Rules page server certificate.
 
 .DESCRIPTION
-Set the new exported certificate to be the SSW Rules page server (rules.ssw.com.au) certificate.
+Set the new exported certificate to be the SSW Rules page server certificate.
 
 .PARAMETER CertThumbprint
 The actual certificate thumbprint, location taken from the configuration file and imported to the function on runtime.
@@ -384,20 +389,20 @@ function Set-SswRulesCert {
             Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
 
             netsh http delete sslcert hostnameport="rules.ssw.com.au:443"
-            netsh http delete sslcert hostnameport="sharepoint.ssw.com.au:443"
+            netsh http delete sslcert hostnameport="Sharepoint.ssw.com.au:443"
 
             $guid1 = [guid]::NewGuid().ToString("B")
             $guid2 = [guid]::NewGuid().ToString("B")
             netsh http add sslcert hostnameport="rules.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"
-            netsh http add sslcert hostnameport="sharepoint.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid2"
+            netsh http add sslcert hostnameport="Sharepoint.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid2"
 
-            $binding1 = Get-WebBinding -hostheader "sharepoint.ssw.com.au" -Port 443
+            $binding1 = Get-WebBinding -hostheader "Sharepoint.ssw.com.au" -Port 443
             $binding1.AddSslCertificate($CertThumbprint, "my")
 
             $binding2 = Get-WebBinding -hostheader "rules.ssw.com.au" -Port 443
             $binding2.AddSslCertificate($CertThumbprint, "my")
         }
-        Write-Log -File $LogFile -Message "Exported certificate to $RulesServer, set sharepoint.ssw.com.au and rules.ssw.com.au cert to $CertThumbprint..."
+        Write-Log -File $LogFile -Message "Exported certificate to $RulesServer, set Sharepoint.ssw.com.au and rules.ssw.com.au cert to $CertThumbprint..."
     }
     catch {
         $Script:SetSswRulesCertError = $true
@@ -647,11 +652,11 @@ The following was done:<ol>
 <li>Go to https://ssw.com.au | Check the certificate | Ensure certificate is renewed
 <ul><li>If not, go to $env:computername | Check "Certify the Web" application</li></ul>
 <li>Go to ASDM | Install new certificate (can be found in $LECertFolder) </li>
-<li>Check if any errors. If not, you changed the certs on most URLs correctly! You can check by running (all of them should have the thumbprint you just set): <ul><li><b>get-WebApplicationProxyApplication | where externalurl -like *.ssw.com.au* | where externalurl -notlike *crm* | where externalurl -notlike *sts2* | select Subject,NotBefore,NotAfter,Thumbprint,Issuer</b></ul></li></li>
-
+<li>Go to Skype for Business Servers | Install new certificate (can be found in $LECertFolder) | Set the correct certificates (you can follow this <a href="https://uclobby.com/2015/05/15/request-renewing-skype-for-business-server-2015-certificates/">guide</a>) </li>
 </ol>
 
-<p>-- Powered by SSWSysAdmins.SSWCertExporter<br> Server: $env:computername </p></div>
+<p>-- Powered by SSWSysAdmins.SSWCertExporter<br>GitHub: <a href="https://github.com/SSWConsulting/SSWSysAdmins.CertExporter">SSWSysAdmins.CertExporter</a><br>
+Server: $env:computername </p></div>
 "@
 }
 
@@ -664,4 +669,4 @@ Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Conte
 Set-CrmWebHookCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -CrmWebHookServer $CrmWebHookServer
 New-EmailMessage
 
-Send-MailMessage -From "info@ssw.com.au" -to "kiki@ssw.com.au" -Subject "Main SSW Certificate Renewed - Further Manual Action Needed" -Body $Script:bodyhtml -SmtpServer "ssw-com-au.mail.protection.outlook.com" -BodyAsHtml
+Send-MailMessage -From $OriginEmail -to $TargetEmail -Subject "Main SSW Certificate Renewed - Further Manual Action Needed" -Body $Script:bodyhtml -SmtpServer "ssw-com-au.mail.protection.outlook.com" -BodyAsHtml
