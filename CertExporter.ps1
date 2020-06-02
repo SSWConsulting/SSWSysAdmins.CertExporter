@@ -21,9 +21,6 @@
 # Importing the configuration file
 $config = Import-PowerShellDataFile $PSScriptRoot\Config.PSD1
 
-# Importing the SSW Write-Log module
-Import-Module -Name $config.LogModuleLocation
-
 # Creating variables to determine magic strings and getting them from the configuration file
 $LECertFolder = $config.LECertFolder
 $LECertThumbprint = $config.LECertThumbprint
@@ -38,9 +35,14 @@ $AdfsServer = $config.AdfsServer
 $RulesServer = $config.RulesServer
 $WugServer = $config.WugServer
 $CrmWebHookServer = $config.CrmWebHookServer
+$ReportsServer = $config.ReportsServer
 $OriginEmail = $config.OriginEmail
 $TargetEmail = $config.TargetEmail
+$WebServer = $config.WebServer
+$LogModuleLocation = $config.LogModuleLocation
 
+# Importing the SSW Write-Log module
+Import-Module -Name $LogModuleLocation
 
 # Creating error variables that will be used at the end
 $Script:ExportSSWCertError = $false
@@ -49,6 +51,7 @@ $Script:SetAdfsCertsError = $false
 $Script:SetSswRulesCertError = $false
 $Script:SetWugCertError = $false
 $Script:SetCrmWebHookCertError = $false
+$Script:SetReportsCertError = $false
 
 <#
 .SYNOPSIS
@@ -93,25 +96,54 @@ function Export-SSWCert {
         [Parameter(Mandatory)]
         $CertFolder,
         [Parameter(Mandatory)]
-        $LogFile
+        $LogFile,
+        [Parameter(Mandatory)]
+        $WebServer,
+        [Parameter(Mandatory)]
+        $WapxUser,
+        [Parameter(Mandatory)]
+        $WapxPass,
+        [Parameter(Mandatory)]
+        $LogModuleLocation
     )
 
     try {
-        # Setting the Certificate password
-        $mypwd = $CertPass | ConvertTo-SecureString -Key $CertKey
-    
-        # Get all certs in the machine where the issuer is let's encrypt and export them
-        $item = get-childitem -path Cert:\LocalMachine\My
-        $CurrentDate = Get-Date -Format "dd-MM-yyyy"
-        $item = $item | where-object { $_.Issuer -eq "CN=Let's Encrypt Authority X3, O=Let's Encrypt, C=US" -and $_.NotBefore.ToString("dd-MM-yyyy") -eq $CurrentDate } 
-        $item | foreach { $NewCertName = $item.Subject.Substring(3, 10) + "-From" + $_.NotBefore.ToString("dd-MM-yyyy") + "-To" + $_.NotAfter.ToString("dd-MM-yyyy") + ".pfx" }
-        $item | foreach { Export-PfxCertificate -cert $_ -FilePath "$CertFolder\$NewCertName" -Password $mypwd -NoClobber }    
-        $SSWThumbprint = $item.Thumbprint 
+        
+        # Get the encrypted username and password files
+        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
+        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
 
-        Set-Content -Path $CertThumbprint -Value $SSWThumbprint
-        Set-Content -Path $CertName -Value $NewCertName
+        $InvokeResult = Invoke-Command -ComputerName $WebServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder, $LogModuleLocation, $LogFile -ScriptBlock {
+                     
+            $CertThumbprint = $args[0]
+            $CertName = $args[1]
+            $CertFolder = $args[4]
+            $CertPass = $args[2]
+            $CertKey = $args[3]
+            $LogModuleLocation = $args[5]
+            $LogFile = $args[6]
 
-        Write-Log -File $LogFile -Message "Certificate thumbprint $SSWThumbprint and name $NewCertName exported to $CertThumbprint and $CertName..."
+            # Importing the SSW Write-Log module
+            Import-Module -Name $LogModuleLocation
+
+            # Setting the Certificate password
+            $mypwd = $CertPass | ConvertTo-SecureString -Key $CertKey
+
+            # Get all certs in the machine where the issuer is let's encrypt and was created today and export them
+            $item = get-childitem -path Cert:\LocalMachine\My
+            $CurrentDate = Get-Date -Format "dd-MM-yyyy"
+            $item = $item | where-object { $_.Issuer -eq "CN=Let's Encrypt Authority X3, O=Let's Encrypt, C=US" -and $_.NotBefore.ToString("dd-MM-yyyy") -eq $CurrentDate } 
+            $item | foreach { $NewCertName = $item.Subject.Substring(3, 10) + "-From" + $_.NotBefore.ToString("dd-MM-yyyy") + "-To" + $_.NotAfter.ToString("dd-MM-yyyy") + ".pfx" }
+            $item | foreach { Export-PfxCertificate -cert $_ -FilePath "$CertFolder\$NewCertName" -Password $mypwd }    
+            $SSWThumbprint = $item.Thumbprint 
+
+            Set-Content -Path $CertThumbprint -Value $SSWThumbprint
+            Set-Content -Path $CertName -Value $NewCertName
+
+            Write-Log -File $LogFile -Message "Certificate thumbprint $SSWThumbprint and name $NewCertName exported to $CertThumbprint and $CertName..."
+        } 
+        
+        #Write-Log -File $LogFile -Message "Certificate $InvokeResult thumbprint $($InvokeResult.SSWThumbprint) and name $($InvokeResult.NewCertName) exported to $CertThumbprint and $CertName..."
     }
     catch {
         $Script:ExportSSWCertError = $true
@@ -589,6 +621,93 @@ function Set-CrmWebHookCert {
 
 <#
 .SYNOPSIS
+Set the new exported certificate to be the Reports certificate.
+
+.DESCRIPTION
+Set the new exported certificate to be the Reports certificate.
+
+.PARAMETER CertThumbprint
+The actual certificate thumbprint, location taken from the configuration file and imported to the function on runtime.
+
+.PARAMETER CertName
+The actual certificate name, location taken from the configuration file and imported to the function on runtime.
+
+.PARAMETER CertPass
+The actual certificate password, location taken from the configuration file and imported to the function on runtime.
+
+.PARAMETER CertKey
+The decryption key to be used on the exported pass.
+
+.PARAMETER CertFolder
+The root folder of the certificate.
+
+.PARAMETER WapxUser
+The username for the Wapx Server.
+
+.PARAMETER WapxPass
+The password for the Wapx Server.
+
+.PARAMETER LogFile
+The location of the logfile.
+
+.PARAMETER ReprotsServer
+The name of the server that Reports is sitting in.
+
+.EXAMPLE
+PS> 
+
+#>
+function Set-ReportsCert {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        $CertThumbprint,
+        [Parameter(Mandatory)]
+        $CertName,
+        [Parameter(Mandatory)]
+        $CertPass,
+        [Parameter(Mandatory)]
+        $CertKey,
+        [Parameter(Mandatory)]
+        $WapxUser,
+        [Parameter(Mandatory)]
+        $WapxPass,
+        [Parameter(Mandatory)]
+        $CertFolder,
+        [Parameter(Mandatory)]
+        $LogFile,
+        [Parameter(Mandatory)]
+        $ReportsServer
+    )
+
+    try {
+        # Get the encrypted username and password files
+        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
+        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
+    
+        Invoke-Command -ComputerName $ReportsServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
+            $CertThumbprint = $args[0]
+            $CertName = $args[1]
+            $FullCertFolder = ($args[4]) + "\" + $CertName
+            $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
+            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
+
+            $guid1 = [guid]::NewGuid().ToString("B")
+            netsh http add sslcert hostnameport="*:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"          
+            $binding1 = Get-WebBinding -hostheader "*" -Port 443
+            $binding1.AddSslCertificate($CertThumbprint, "my")          
+        }
+        Write-Log -File $LogFile -Message "Exported certificate to $ReportsServer, set Reports cert to $CertThumbprint..."
+    }
+    catch {
+        $Script:SetReportsCertError = $true
+        $RecentError = $Error[0]
+        Write-Log -File $LogFile -Message "ERROR on function Set-ReportsCert - $RecentError"
+    }
+}
+
+<#
+.SYNOPSIS
 Function to build the email to be sent in real time.
 
 .DESCRIPTION
@@ -601,72 +720,90 @@ PS> New-EmailMessage
 function New-EmailMessage {
     
     if ($Script:ExportSSWCertError -eq $true) {
-        $ErroredActions += "<li style=color:red;>$env:computername - <strong>ERROR</strong> on exporting the renewed certificate | Check the log at $LogFile</li>"
+        $ErroredActions += "<li style=color:red;>&#9940; $WebServer - <strong>ERROR</strong> on exporting the renewed certificate | Check the log at $LogFile</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>$env:computername - <strong>SUCCESS</strong> on exporting the renewed certificate</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $WebServer - <strong>SUCCESS</strong> on exporting the renewed certificate</li>"
     }
     if ($Script:SetWapxCertsError -eq $true) {
-        $ErroredActions += "<li style=color:red;>$WapxServer - <strong>ERROR</strong> on setting Wapx Certificates | Check the log at $LogFile</li>"
+        $ErroredActions += "<li style=color:red;>&#9940; $WapxServer - <strong>ERROR</strong> on setting Wapx Certificates | Check the log at $LogFile</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>$WapxServer - <strong>SUCCESS</strong> on setting Wapx Certificates</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $WapxServer - <strong>SUCCESS</strong> on setting Wapx Certificates</li>"
     }
     if ($Script:SetAdfsCertsError -eq $true) {
-        $ErroredActions += "<li style=color:red;>$AdfsServer - <strong>ERROR</strong> on setting ADFS certificates | Check the log at $LogFile | Alternatively, use this guide <a href=https://purple.telstra.com.au/blog/adfs-service-communication-certificate-renewal-steps>here<a> (run the commands, they show different results than the GUI)</li>"
+        $ErroredActions += "<li style=color:red;>&#9940; $AdfsServer - <strong>ERROR</strong> on setting ADFS certificates | Check the log at $LogFile | Alternatively, use this guide <a href=https://purple.telstra.com.au/blog/adfs-service-communication-certificate-renewal-steps>here<a> (run the commands, they show different results than the GUI)</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>$AdfsServer - <strong>SUCCESS</strong> on setting ADFS certificates</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $AdfsServer - <strong>SUCCESS</strong> on setting ADFS certificates</li>"
     }
     if ($Script:SetSswRulesCertError -eq $true) {
-        $ErroredActions += "<li style=color:red;>$RulesServer - <strong>ERROR</strong> on setting rules certificate | Check the log at $LogFile</li>"
+        $ErroredActions += "<li style=color:red;>&#9940; $RulesServer - <strong>ERROR</strong> on setting rules certificate | Check the log at $LogFile</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>$RulesServer - <strong>SUCCESS</strong> on setting rules certificate</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $RulesServer - <strong>SUCCESS</strong> on setting rules certificate</li>"
     }
     if ($Script:SetWugCertError -eq $true) {
-        $ErroredActions += "<li style=color:red;>$WugServer - <strong>ERROR</strong> on setting the WUG certificate | Check the log at $LogFile</li>"
+        $ErroredActions += "<li style=color:red;>&#9940; $WugServer - <strong>ERROR</strong> on setting the WUG certificate | Check the log at $LogFile</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>$WugServer - <strong>SUCCESS</strong> on setting the WUG certificate</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $WugServer - <strong>SUCCESS</strong> on setting the WUG certificate</li>"
     }
-    if ($SetCrmWebHookCertError -eq $true) {
-        $ErroredActions += "<li style=color:red;>$CrmWebHookServer - <strong>ERROR</strong> on setting the CRM Webhook certificate | Check the log at $LogFile</li>"
+    if ($Script:SetCrmWebHookCertError -eq $true) {
+        $ErroredActions += "<li style=color:red;>&#9940; $CrmWebHookServer - <strong>ERROR</strong> on setting the CRM Webhook certificate | Check the log at $LogFile</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>$CrmWebHookServer - <strong>SUCCESS</strong> on setting the CRM Webhook certificate</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $CrmWebHookServer - <strong>SUCCESS</strong> on setting the CRM Webhook certificate</li>"
+    }
+    if ($Script:SetReportsCertError -eq $true) {
+        $ErroredActions += "<li style=color:red;>&#9940; $ReportsServer - <strong>ERROR</strong> on setting the Reports certificate | Check the log at $LogFile</li>"
+    }
+    else {
+        $CoolActions += "<li style=color:green;>&#9989; $ReportsServer - <strong>SUCCESS</strong> on setting the Reports certificate</li>"
     }
 
     $Script:bodyhtml = @"
-<div style='font-family:Calibri'>
-<p><h3>To SSWSysAdmins,</h3>
-<p>If this email has been sent, it means Certify The Web has renewed the main SSW certificate in SYDIISP03 (a PS script is triggered by the application after renewal is successful).<br>
-The following was done:<ol> 
+    <div style='font-family:Calibri'>
+    <p>SSL Certificates are a pain and can be expensive. They can, however, be free if you leverage the power of <a href="https://letsencrypt.org/">Let's Encrypt</a>, which is a nonprofit Certificate Authority that provides free SSL certificates. <br>The only downside is that they need to be renewed every 3 months - SSW.CertExporter takes the pain out of it, used in conjunction with <a href="https://certifytheweb.com/">Certify The Web</a>, it can automatically export the renewed certificate and import and set them on your websites and applications in different servers.<p>As per rule: <a href="https://rules.ssw.com.au/do-you-use-free-or-paid-ssl-certificates">Do you use free or paid SSL certificates?</a></p>
+    
+    <p><h3>To SSWSysAdmins,</h3>
+    
+    <p>If this email has been sent, it means <a href="https://certifytheweb.com/">Certify SSL Manager</a> has renewed the main SSW certificate in $WebServer, and SSW.CertExporter PowerShell script ran.
+    <p><h4>Certify SSL Manager did the following:</h4>
+    <ol>
+    <li>Sucessfully renewed ssw.com.au SSL certificate
+    <li>Set <a href="https://ssw.com.au">https://ssw.com.au</a> SSL certificate automatically</li>
+    <li>A <a href="https://docs.certifytheweb.com/docs/script-hooks#post-request-script-hooks">Post-Request Script Webhook</a> executed this SSW.CertExporter PowerShell script
+    </ol>
+    <p><h4>SSW.CertExporter did the following:</h4><ol> 
 "@
     $Script:bodyhtml += $CoolActions
     $Script:bodyhtml += $ErroredActions
     $Script:bodyhtml += @"
-</ol>
-<p>Now do the following:</p>
-<ol>
-<li>Go to https://ssw.com.au | Check the certificate | Ensure certificate is renewed
-<ul><li>If not, go to $env:computername | Check "Certify the Web" application</li></ul>
-<li>Go to ASDM | Install new certificate (can be found in $LECertFolder) </li>
-<li>Go to Skype for Business Servers | Install new certificate (can be found in $LECertFolder) | Set the correct certificates (you can follow this <a href="https://uclobby.com/2015/05/15/request-renewing-skype-for-business-server-2015-certificates/">guide</a>) </li>
-</ol>
-
-<p>-- Powered by SSWSysAdmins.SSWCertExporter<br>GitHub: <a href="https://github.com/SSWConsulting/SSWSysAdmins.CertExporter">SSWSysAdmins.CertExporter</a><br>
-Server: $env:computername </p></div>
+    </ol>
+    <p><h4>Now manually action:</p></h4>
+    <ol>
+    <li>Go to <a href="https://ssw.com.au">https://ssw.com.au</a> | Ensure certificate is renewed correctly
+    <ul><li>If not, go to $WebServer | Check Certify SSL Manager</li></ul>
+    <li>Go to ASDM | Install new certificate (can be found in $LECertFolder) </li>
+    <li>Go to Skype for Business Servers | Install new certificate (can be found in $LECertFolder) | Set the correct certificates (you can follow this <a href="https://uclobby.com/2015/05/15/request-renewing-skype-for-business-server-2015-certificates/">guide</a>) </li>
+    </ol>
+    
+    <p>-- Powered by SSWSysAdmins.SSWCertExporter<br><br>GitHub: <a href="https://github.com/SSWConsulting/SSWSysAdmins.CertExporter">SSWSysAdmins.CertExporter</a><br>
+    Server: $WebServer <br>
+    Folder: $PSScriptRoot</p></div>
 "@
 }
 
 # Let's run the commands one by one
-Export-SSWCert -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -CertThumbprint $LECertThumbprint -CertName $LECertName -LogFile $LogFile -CertPass (Get-Content $LECertPass)
+Export-SSWCert -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -CertThumbprint $LECertThumbprint -CertName $LECertName -LogFile $LogFile -CertPass (Get-Content $LECertPass) -WebServer $WebServer -WapxUser $WapxUser -WapxPass $WapxPass -LogModuleLocation $LogModuleLocation
 Set-WapxCerts -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -WapxServer $WapxServer
 Set-AdfsCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -AdfsServer $AdfsServer -WapxServer $WapxServer
 Set-SswRulesCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -RulesServer $RulesServer
 Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -WugServer $WugServer
 Set-CrmWebHookCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -CrmWebHookServer $CrmWebHookServer
+Set-ReportsCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -ReportsServer $ReportsServer
+
 New-EmailMessage
 
-Send-MailMessage -From $OriginEmail -to $TargetEmail -Subject "Main SSW Certificate Renewed - Further Manual Action Needed" -Body $Script:bodyhtml -SmtpServer "ssw-com-au.mail.protection.outlook.com" -BodyAsHtml
+Send-MailMessage -From $OriginEmail -to $TargetEmail -Subject "SSW.Certificates - Main SSW Certificate Renewed - Further manual action required" -Body $Script:bodyhtml -SmtpServer "ssw-com-au.mail.protection.outlook.com" -BodyAsHtml
