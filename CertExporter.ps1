@@ -785,11 +785,12 @@ function New-EmailMessage {
     <ol>
     <li>Go to <a href="https://ssw.com.au">https://ssw.com.au</a> | Ensure certificate is renewed correctly
     <ul><li>If not, go to $WebServer | Check Certify SSL Manager</li></ul>
-    <li>Go to ASDM | Install new certificate (can be found in $LECertFolder) </li>
+    <li>Go to ASDM | Follow this <a href="https://sswcom.sharepoint.com/:w:/r/SysAdmin/SharedDocuments/Procedures/HowTos-ChangeASDMCertificate.docx?d=w5a3cb2870d31441593d09dcb3391757e&csf=1&web=1&e=Bl9eW2">guide</a> | Install new certificate (can be found in $LECertFolder) </li>
     <li>Go to Skype for Business Servers | Install new certificate (can be found in $LECertFolder) | Set the correct certificates (you can follow this <a href="https://uclobby.com/2015/05/15/request-renewing-skype-for-business-server-2015-certificates/">guide</a>) </li>
     </ol>
     
-    <p>-- Powered by SSWSysAdmins.SSWCertExporter<br><br>GitHub: <a href="https://github.com/SSWConsulting/SSWSysAdmins.CertExporter">SSWSysAdmins.CertExporter</a><br>
+    <p>-- Powered by SSWSysAdmins.SSWCertExporter<br>
+    <br>GitHub: <a href="https://github.com/SSWConsulting/SSWSysAdmins.CertExporter">SSWSysAdmins.CertExporter</a><br>
     Server: $WebServer <br>
     Folder: $PSScriptRoot</p></div>
 "@
