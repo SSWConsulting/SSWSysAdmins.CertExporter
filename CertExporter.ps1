@@ -225,7 +225,7 @@ function Set-WapxCerts {
             $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
             Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
             
-            $certs = get-WebApplicationProxyApplication | where externalurl -like *.ssw.com.au* | where externalurl -notlike *crm* | where externalurl -notlike *sts2* | set-WebApplicationProxyApplication -ExternalCertificateThumbprint $CertThumbprint
+            $certs = get-WebApplicationProxyApplication | where externalurl -like *.ssw.com.au* | set-WebApplicationProxyApplication -ExternalCertificateThumbprint $CertThumbprint
             
         }
         
