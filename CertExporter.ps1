@@ -40,6 +40,7 @@ $OriginEmail = $config.OriginEmail
 $TargetEmail = $config.TargetEmail
 $WebServer = $config.WebServer
 $LogModuleLocation = $config.LogModuleLocation
+$SMTPServer = $config.SMTPServer
 
 # Importing the SSW Write-Log module
 Import-Module -Name $LogModuleLocation
@@ -113,7 +114,7 @@ function Export-SSWCert {
         $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
         $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
 
-        $InvokeResult = Invoke-Command -ComputerName $WebServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder, $LogModuleLocation, $LogFile -ScriptBlock {
+        Invoke-Command -ComputerName $WebServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder, $LogModuleLocation, $LogFile -ScriptBlock {
                      
             $CertThumbprint = $args[0]
             $CertName = $args[1]
@@ -142,8 +143,6 @@ function Export-SSWCert {
 
             Write-Log -File $LogFile -Message "Certificate thumbprint $SSWThumbprint and name $NewCertName exported to $CertThumbprint and $CertName..."
         } 
-        
-        #Write-Log -File $LogFile -Message "Certificate $InvokeResult thumbprint $($InvokeResult.SSWThumbprint) and name $($InvokeResult.NewCertName) exported to $CertThumbprint and $CertName..."
     }
     catch {
         $Script:ExportSSWCertError = $true
@@ -605,12 +604,27 @@ function Set-CrmWebHookCert {
             Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
 
             netsh http delete sslcert hostnameport="CRMWebhook.ssw.com.au:443"
+            netsh http delete sslcert hostnameport="sydiisp01:443"
+            netsh http delete sslcert hostnameport="sydiisp01.sydney.ssw.com.au:443"
+            netsh http delete sslcert hostnameport="rulesbeta.ssw.com.au:443"
             $guid1 = [guid]::NewGuid().ToString("B")
-            netsh http add sslcert hostnameport="CRMWebhook.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"          
+            $guid2 = [guid]::NewGuid().ToString("B")
+            $guid3 = [guid]::NewGuid().ToString("B")
+            $guid4 = [guid]::NewGuid().ToString("B")
+            netsh http add sslcert hostnameport="CRMWebhook.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"     
+            netsh http add sslcert hostnameport="sydiisp01:443" certhash=$CertThumbprint certstorename=MY appid="$guid2"    
+            netsh http add sslcert hostnameport="sydiisp01.sydney.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid3"    
+            netsh http add sslcert hostnameport="rulesbeta.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid4"         
             $binding1 = Get-WebBinding -hostheader "CRMWebhook.ssw.com.au" -Port 443
-            $binding1.AddSslCertificate($CertThumbprint, "my")          
+            $binding1.AddSslCertificate($CertThumbprint, "my")       
+            $binding2 = Get-WebBinding -hostheader "sydiisp01:443" -Port 443
+            $binding2.AddSslCertificate($CertThumbprint, "my")   
+            $binding3 = Get-WebBinding -hostheader "sydiisp01.sydney.ssw.com.au:443" -Port 443
+            $binding3.AddSslCertificate($CertThumbprint, "my")    
+            $binding4 = Get-WebBinding -hostheader "rulesbeta.ssw.com.au:443" -Port 443
+            $binding4.AddSslCertificate($CertThumbprint, "my")        
         }
-        Write-Log -File $LogFile -Message "Exported certificate to $CrmWebHookServer, set WUG cert to $CertThumbprint..."
+        Write-Log -File $LogFile -Message "Exported certificate to $CrmWebHookServer, set CRMWebHook and rulesbeta cert to $CertThumbprint..."
     }
     catch {
         $Script:SetCrmWebHookCertError = $true
@@ -806,4 +820,4 @@ Set-ReportsCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-C
 
 New-EmailMessage
 
-Send-MailMessage -From $OriginEmail -to $TargetEmail -Subject "SSW.Certificates - Main SSW Certificate Renewed - Further manual action required" -Body $Script:bodyhtml -SmtpServer "ssw-com-au.mail.protection.outlook.com" -BodyAsHtml
+Send-MailMessage -From $OriginEmail -to $TargetEmail -Subject "SSW.Certificates - Main SSW Certificate Renewed - Further manual action required" -Body $Script:bodyhtml -SmtpServer $SMTPServer -BodyAsHtml
