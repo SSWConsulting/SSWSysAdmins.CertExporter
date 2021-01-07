@@ -671,6 +671,7 @@ function New-EmailMessage {
     <li>Go to <a href="https://ssw.com.au">https://ssw.com.au</a> | Ensure certificate is renewed correctly
     <ul><li>If not, go to $WebServer | Check Certify SSL Manager</li></ul>
     <li>Go to ASDM | Follow this <a href="https://sswcom.sharepoint.com/:w:/r/SysAdmin/SharedDocuments/Procedures/HowTos-ChangeASDMCertificate.docx?d=w5a3cb2870d31441593d09dcb3391757e&csf=1&web=1&e=Bl9eW2">guide</a> | Install new certificate (can be found in $LECertFolder) </li>
+    <li>Go to $LECertFolder | Grab the latest thumbprint and certificate file | Send a message on Teams to "SSW TimePro" Team so they update the Octopus "App.SslThumbprint" variable with the new one just generated </li>
     </ol>
     
     <p>-- Powered by SSWSysAdmins.SSWCertExporter<br>
