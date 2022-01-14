@@ -30,7 +30,6 @@ $LECertKey = $config.LECertKey
 $WapxUser = $config.WapxUser
 $WapxPass = $config.WapxPass
 $LogFile = $config.LogFile
-$RulesServer = $config.RulesServer
 $WugServer = $config.WugServer
 $CrmWebHookServer = $config.CrmWebHookServer
 $ReportsServer = $config.ReportsServer
@@ -45,7 +44,6 @@ Import-Module -Name $LogModuleLocation
 
 # Creating error variables that will be used at the end
 $Script:ExportSSWCertError = $false
-$Script:SetSswRulesCertError = $false
 $Script:SetWugCertError = $false
 $Script:SetCrmWebHookCertError = $false
 $Script:SetReportsCertError = $false
@@ -148,103 +146,6 @@ function Export-SSWCert {
         $RecentError = $Error[0]
         Write-Log -File $LogFile -Message "ERROR on function Export-SSWCert - $RecentError"
     }
-}
-
-<#
-.SYNOPSIS
-Set the new exported certificate to be the SSW Rules page server certificate.
-
-.DESCRIPTION
-Set the new exported certificate to be the SSW Rules page server certificate.
-
-.PARAMETER CertThumbprint
-The actual certificate thumbprint, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertName
-The actual certificate name, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertPass
-The actual certificate password, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertKey
-The decryption key to be used on the exported pass.
-
-.PARAMETER CertFolder
-The root folder of the certificate.
-
-.PARAMETER WapxUser
-The username for the Wapx Server.
-
-.PARAMETER WapxPass
-The password for the Wapx Server.
-
-.PARAMETER LogFile
-The location of the logfile.
-
-.PARAMETER RulesServer
-The name of the server that the Rules website is sitting in.
-
-.EXAMPLE
-PS> Set-SswRulesCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -RulesServer $RulesServer
-
-#>
-function Set-SswRulesCert {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        $CertThumbprint,
-        [Parameter(Mandatory)]
-        $CertName,
-        [Parameter(Mandatory)]
-        $CertPass,
-        [Parameter(Mandatory)]
-        $CertKey,
-        [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
-        [Parameter(Mandatory)]
-        $CertFolder,
-        [Parameter(Mandatory)]
-        $LogFile,
-        [Parameter(Mandatory)]
-        $RulesServer
-    )
-
-    try {
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-    
-        Invoke-Command -ComputerName $RulesServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
-            $CertThumbprint = $args[0]
-            $CertName = $args[1]
-            $FullCertFolder = ($args[4]) + "\" + $CertName
-            $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
-            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
-
-            netsh http delete sslcert hostnameport="rules.ssw.com.au:443"
-            netsh http delete sslcert hostnameport="Sharepoint.ssw.com.au:443"
-
-            $guid1 = [guid]::NewGuid().ToString("B")
-            $guid2 = [guid]::NewGuid().ToString("B")
-            netsh http add sslcert hostnameport="rules.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"
-            netsh http add sslcert hostnameport="Sharepoint.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid2"
-
-            $binding1 = Get-WebBinding -hostheader "Sharepoint.ssw.com.au" -Port 443
-            $binding1.AddSslCertificate($CertThumbprint, "my")
-
-            $binding2 = Get-WebBinding -hostheader "rules.ssw.com.au" -Port 443
-            $binding2.AddSslCertificate($CertThumbprint, "my")
-        }
-        Write-Log -File $LogFile -Message "Exported certificate to $RulesServer, certificate thumbprint is $CertThumbprint..."
-    }
-    catch {
-        $Script:SetSswRulesCertError = $true
-        $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-SswRulesCert - $RecentError"
-    }   
-
 }
 
 <#
@@ -616,12 +517,6 @@ function New-EmailMessage {
     else {
         $CoolActions += "<li style=color:green;>&#9989; $WebServer - <strong>SUCCESS</strong> on exporting the renewed certificate</li>"
     }
-    if ($Script:SetSswRulesCertError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $RulesServer - <strong>ERROR</strong> on setting rules certificate | Check the log at $LogFile</li>"
-    }
-    else {
-        $CoolActions += "<li style=color:green;>&#9989; $RulesServer - <strong>SUCCESS</strong> on setting rules certificate</li>"
-    }
     if ($Script:SetWugCertError -eq $true) {
         $ErroredActions += "<li style=color:red;>&#9940; $WugServer - <strong>ERROR</strong> on setting the WUG certificate | Check the log at $LogFile</li>"
     }
@@ -671,7 +566,6 @@ function New-EmailMessage {
     <li>Go to <a href="https://ssw.com.au">https://ssw.com.au</a> | Ensure certificate is renewed correctly
     <ul><li>If not, go to $WebServer | Check Certify SSL Manager</li></ul>
     <li>Go to ASDM | Follow this <a href="https://sswcom.sharepoint.com/:w:/r/SysAdmin/SharedDocuments/Procedures/HowTos-ChangeASDMCertificate.docx?d=w5a3cb2870d31441593d09dcb3391757e&csf=1&web=1&e=Bl9eW2">guide</a> | Install new certificate (can be found in $LECertFolder) </li>
-    <li>Go to $LECertFolder | Grab the latest thumbprint and certificate file | Send a message on Teams to "SSW TimePro" Team so they update the Octopus "App.SslThumbprint" variable with the new one just generated </li>
     </ol>
     
     <p>-- Powered by SSWSysAdmins.SSWCertExporter<br>
@@ -683,7 +577,6 @@ function New-EmailMessage {
 
 # Let's run the commands one by one
 Export-SSWCert -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -CertThumbprint $LECertThumbprint -CertName $LECertName -LogFile $LogFile -CertPass (Get-Content $LECertPass) -WebServer $WebServer -WapxUser $WapxUser -WapxPass $WapxPass -LogModuleLocation $LogModuleLocation
-Set-SswRulesCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -RulesServer $RulesServer
 Set-ReverseProxyCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -ReverseProxyServer $ReverseProxyServer
 Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -WugServer $WugServer
 Set-CrmWebHookCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -CrmWebHookServer $CrmWebHookServer
