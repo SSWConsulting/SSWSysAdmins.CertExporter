@@ -38,6 +38,7 @@ $TargetEmail = $config.TargetEmail
 $WebServer = $config.WebServer
 $LogModuleLocation = $config.LogModuleLocation
 $ReverseProxyServer = $config.ReverseProxyServer
+$StagingServer = $config.StagingServer
 
 # Importing the SSW Write-Log module
 Import-Module -Name $LogModuleLocation
@@ -48,6 +49,7 @@ $Script:SetWugCertError = $false
 $Script:SetCrmWebHookCertError = $false
 $Script:SetReportsCertError = $false
 $Script:SetReverseProxyServerError = $false
+$Script:SetStagingServerError = $false
 
 <#
 .SYNOPSIS
@@ -500,6 +502,94 @@ function Set-ReportsCert {
 
 <#
 .SYNOPSIS
+Set the new exported certificate to be the staging server certificate.
+
+.DESCRIPTION
+Set the new exported certificate to be the staging server certificate.
+
+.PARAMETER CertThumbprint
+The actual certificate thumbprint, location taken from the configuration file and imported to the function on runtime.
+
+.PARAMETER CertName
+The actual certificate name, location taken from the configuration file and imported to the function on runtime.
+
+.PARAMETER CertPass
+The actual certificate password, location taken from the configuration file and imported to the function on runtime.
+
+.PARAMETER CertKey
+The decryption key to be used on the exported pass.
+
+.PARAMETER CertFolder
+The root folder of the certificate.
+
+.PARAMETER WapxUser
+The username for the Wapx Server.
+
+.PARAMETER WapxPass
+The password for the Wapx Server.
+
+.PARAMETER LogFile
+The location of the logfile.
+
+.PARAMETER StagingServer
+The name of the server that Staging website is sitting in.
+
+.EXAMPLE
+PS> Set-StagingCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -StagingServer $StagingServer
+
+#>
+
+function Set-StagingCert {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        $CertThumbprint,
+        [Parameter(Mandatory)]
+        $CertName,
+        [Parameter(Mandatory)]
+        $CertPass,
+        [Parameter(Mandatory)]
+        $CertKey,
+        [Parameter(Mandatory)]
+        $WapxUser,
+        [Parameter(Mandatory)]
+        $WapxPass,
+        [Parameter(Mandatory)]
+        $CertFolder,
+        [Parameter(Mandatory)]
+        $LogFile,
+        [Parameter(Mandatory)]
+        $StagingServer
+    )
+
+    try {
+        # Get the encrypted username and password files
+        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
+        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
+    
+        Invoke-Command -ComputerName $StagingServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
+            $CertThumbprint = $args[0]
+            $CertName = $args[1]
+            $FullCertFolder = ($args[4]) + "\" + $CertName
+            $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
+            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
+
+            $guid1 = [guid]::NewGuid().ToString("B")
+            #netsh http add sslcert hostnameport="*:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"          
+            $binding1 = Get-WebBinding -Name "SSW Host Development" -Port 443
+            $binding1.AddSslCertificate($CertThumbprint, "my")          
+        }
+        Write-Log -File $LogFile -Message "Exported certificate to $StagingServer, certificate thumbprint is $CertThumbprint..."
+    }
+    catch {
+        $Script:SetStagingServerError = $true
+        $RecentError = $Error[0]
+        Write-Log -File $LogFile -Message "ERROR on function Set-StagingCert - $RecentError"
+    }
+}
+
+<#
+.SYNOPSIS
 Function to build the email to be sent in real time.
 
 .DESCRIPTION
@@ -540,7 +630,13 @@ function New-EmailMessage {
     }
     else {
         $CoolActions += "<li style=color:green;>&#9989; $ReverseProxyServer - <strong>SUCCESS</strong> on setting the Reverse Proxy certificate</li>"
-    }    
+    }
+    if ($Script:SetStagingServerError -eq $true) {
+        $ErroredActions += "<li style=color:red;>&#9940; $StagingServer - <strong>ERROR</strong> on setting the Staging server certificate | Check the log at $LogFile</li>"
+    }
+    else {
+        $CoolActions += "<li style=color:green;>&#9989; $StagingServer - <strong>SUCCESS</strong> on setting the Staging server certificate</li>"
+    }     
 
     $Script:bodyhtml = @"
     <div style='font-family:Calibri'>
@@ -581,5 +677,6 @@ Set-ReverseProxyCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (
 Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -WugServer $WugServer
 Set-CrmWebHookCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -CrmWebHookServer $CrmWebHookServer
 Set-ReportsCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -ReportsServer $ReportsServer
+Set-StagingCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -StagingServer $StagingServer
 New-EmailMessage
 Send-MailMessage -From $OriginEmail -to $TargetEmail -Subject "SSW.Certificates - Main SSW Certificate Renewed - Further manual action required" -Body $Script:bodyhtml -SmtpServer "ssw-com-au.mail.protection.outlook.com" -BodyAsHtml
