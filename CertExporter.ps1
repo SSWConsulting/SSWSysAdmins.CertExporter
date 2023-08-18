@@ -3,19 +3,18 @@
     PowerShell certificate exporter for the main SSW certificate.
 .DESCRIPTION
     PowerShell certificate exporter for the main SSW certificate.
-    It exports the main SSW certificate after it is renewed by the application to different locations: Reverse Proxy, NPS and IIS servers.
+    It exports the main SSW certificate after it is renewed by win-acme to different locations.
 .EXAMPLE
-    This script is triggered after the renewal process is complete at Certify The Web application. To set it, go to Certify The Web | Select the correct site | Show Advanced Options | Scripting | Post-request PS Script.
+    This script is triggered after the renewal process is complete in win-acme.
 .INPUTS
     Configuration file: Config.psd1
 .OUTPUTS
-    Exported certificate, thumbprint, certificate name and password on the defined location in Config.psd1.
+    Thumbprint, certificate name and password on the defined location in Config.psd1.
 .NOTES
-    It will not overwrite any certificate in the folder, only add new ones.
     LE = Let's Encrypt
     WUG = WhatsApp Gold
 
-    Created by Kaique "Kiki" Biancatti for SSW.
+    Created by Kaique "Kiki" Biancatti & Chris Schultz for SSW.
 #>
 
 # Importing the configuration file
@@ -29,62 +28,27 @@ $LECertPass = $config.LECertPass
 $LECertKey = $config.LECertKey
 $WapxUser = $config.WapxUser
 $WapxPass = $config.WapxPass
+$WapxKey = $config.WapxKey
 $LogFile = $config.LogFile
+$CertServer = $config.CertServer
 $WugServer = $config.WugServer
-$CrmWebHookServer = $config.CrmWebHookServer
-$ReportsServer = $config.ReportsServer
+$ContServer = $Config.ContServer
 $OriginEmail = $config.OriginEmail
 $TargetEmail = $config.TargetEmail
-$WebServer = $config.WebServer
 $LogModuleLocation = $config.LogModuleLocation
-$ReverseProxyServer = $config.ReverseProxyServer
-$StagingServer = $config.StagingServer
-$NPS1Server = $Config.NPS1Server
-$NPS2Server = $Config.NPS2Server
 
 # Importing the SSW Write-Log module
 Import-Module -Name $LogModuleLocation
 
 # Creating error variables that will be used at the end
+$Script:GetThumbprintError = $false
 $Script:ExportSSWCertError = $false
 $Script:SetWugCertError = $false
-$Script:SetCrmWebHookCertError = $false
-$Script:SetReportsCertError = $false
-$Script:SetReverseProxyServerError = $false
-$Script:SetStagingServerError = $false
-$Script:SetNPS1ServerError = $false
-$Script:SetNPS2ServerError = $false
+$Script:SetContServerError = $false
 
-<#
-.SYNOPSIS
-Export certificate to File Server to be used by other functions.
-
-.EXAMPLE
-PS> Export-SSWCert -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -CertThumbprint $LECertThumbprint -CertName $LECertName -LogFile $LogFile -CertPass (Get-Content $LECertPass)
-
-.DESCRIPTION
-Export certificate to File Server to be used by other functions.
-Uses an encrypted password file to be the certificate password, writes the latest thumbprint to File Server for use with other functions.
-
-.PARAMETER CertThumbprint
-The location the certificate thumbprint will be exported to.
-
-.PARAMETER CertName
-The location the certificate name will be exported to.
-
-.PARAMETER CertPass
-The password to be set on the exported certificate.
-
-.PARAMETER CertKey
-The decryption key to be used on the exported pass.
-
-.PARAMETER CertFolder
-The root folder the certificate will be exported to.
-
-.PARAMETER LogFile
-The location of the logfile.
-#>
-function Export-SSWCert {
+# Get the new certificate's thumbprint
+Function Get-Thumbprint
+{
     [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
@@ -98,149 +62,24 @@ function Export-SSWCert {
         [Parameter(Mandatory)]
         $CertFolder,
         [Parameter(Mandatory)]
-        $LogFile,
-        [Parameter(Mandatory)]
-        $WebServer,
-        [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
-        [Parameter(Mandatory)]
-        $LogModuleLocation
+        $LogFile
     )
-
-    try {
-        
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-
-        $InvokeResult = Invoke-Command -ComputerName $WebServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder, $LogModuleLocation, $LogFile -ScriptBlock {
-                     
-            $CertThumbprint = $args[0]
-            $CertName = $args[1]
-            $CertFolder = $args[4]
-            $CertPass = $args[2]
-            $CertKey = $args[3]
-            $LogModuleLocation = $args[5]
-            $LogFile = $args[6]
-
-            # Importing the SSW Write-Log module
-            Import-Module -Name $LogModuleLocation
-
-            # Setting the Certificate password
-            $mypwd = $CertPass | ConvertTo-SecureString -Key $CertKey
-
-            # Get all certs in the machine where the issuer is let's encrypt and was created today and export them
-            $item = get-childitem -path Cert:\LocalMachine\My
-            $CurrentDate = Get-Date -Format "dd-MM-yyyy"
-            $item = $item | where-object { $_.Issuer -eq "CN=R3, O=Let's Encrypt, C=US" -and $_.NotBefore.ToString("dd-MM-yyyy") -eq $CurrentDate } 
-            $item | foreach { $NewCertName = $item.Subject.Substring(3, 10) + "-From" + $_.NotBefore.ToString("dd-MM-yyyy") + "-To" + $_.NotAfter.ToString("dd-MM-yyyy") + ".pfx" }
-            $item | foreach { Export-PfxCertificate -cert $_ -FilePath "$CertFolder\$NewCertName" -Password $mypwd }    
-            $SSWThumbprint = $item.Thumbprint 
-
-            Set-Content -Path $CertThumbprint -Value $SSWThumbprint
-            Set-Content -Path $CertName -Value $NewCertName
-
-            Write-Log -File $LogFile -Message "Certificate thumbprint $SSWThumbprint and name $NewCertName exported to $CertThumbprint and $CertName..."
-        } 
-        
-        #Write-Log -File $LogFile -Message "Certificate $InvokeResult thumbprint $($InvokeResult.SSWThumbprint) and name $($InvokeResult.NewCertName) exported to $CertThumbprint and $CertName..."
+    Try
+    {
+        $item = get-childitem -path Cert:\LocalMachine\My
+        $CurrentDate = Get-Date -Format "dd-MM-yyyy"
+        $item = $item | where-object { $_.Issuer -eq "CN=R3, O=Let's Encrypt, C=US" -and $_.NotBefore.ToString("dd-MM-yyyy") -eq $CurrentDate }
+        Set-Content -Path $CertThumbprint -Value $item.Thumbprint -ErrorAction Stop
+        Write-Log -File $LogFile -Message "New Thumbprint written to $CertThumbprint"
     }
-    catch {
-        $Script:ExportSSWCertError = $true
+    Catch
+    {
+        $Script:GetThumbprintError = $true
         $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Export-SSWCert - $RecentError"
+        Write-Log -File $LogFile -Message "ERROR on function Get-Thumbprint - $RecentError"
     }
 }
 
-<#
-.SYNOPSIS
-Set the new exported certificate to be the WUG server certificate.
-
-.DESCRIPTION
-Set the new exported certificate to be the WUG server certificate.
-
-.PARAMETER CertThumbprint
-The actual certificate thumbprint, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertName
-The actual certificate name, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertPass
-The actual certificate password, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertKey
-The decryption key to be used on the exported pass.
-
-.PARAMETER CertFolder
-The root folder of the certificate.
-
-.PARAMETER WapxUser
-The username for the Wapx Server.
-
-.PARAMETER WapxPass
-The password for the Wapx Server.
-
-.PARAMETER LogFile
-The location of the logfile.
-
-.PARAMETER WugServer
-The name of the server that WUG website is sitting in.
-
-.EXAMPLE
-PS> Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -WugServer $WugServer
-
-#>
-
-function Set-ReverseProxyCert {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        $CertThumbprint,
-        [Parameter(Mandatory)]
-        $CertName,
-        [Parameter(Mandatory)]
-        $CertPass,
-        [Parameter(Mandatory)]
-        $CertKey,
-        [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
-        [Parameter(Mandatory)]
-        $CertFolder,
-        [Parameter(Mandatory)]
-        $LogFile,
-        [Parameter(Mandatory)]
-        $ReverseProxyServer
-    )
-
-    try {
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-    
-        Invoke-Command -ComputerName $ReverseProxyServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
-            $CertThumbprint = $args[0]
-            $CertName = $args[1]
-            $FullCertFolder = ($args[4]) + "\" + $CertName
-            $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
-            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
-
-            $guid1 = [guid]::NewGuid().ToString("B")
-            #netsh http add sslcert hostnameport="*:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"          
-            $binding1 = Get-WebBinding -Name "domainsforsale" -Port 443
-            $binding1.AddSslCertificate($CertThumbprint, "my")          
-        }
-        Write-Log -File $LogFile -Message "Exported certificate to $ReverseProxyServer, certificate thumbprint is $CertThumbprint..."
-    }
-    catch {
-        $Script:SetReverseProxyServerError = $true
-        $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-WugCert - $RecentError"
-    }
-}
 
 <#
 .SYNOPSIS
@@ -296,6 +135,8 @@ function Set-WugCert {
         [Parameter(Mandatory)]
         $WapxPass,
         [Parameter(Mandatory)]
+        $WapxKey,
+        [Parameter(Mandatory)]
         $CertFolder,
         [Parameter(Mandatory)]
         $LogFile,
@@ -305,13 +146,13 @@ function Set-WugCert {
 
     try {
         # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
+        $password = $WapxPass | ConvertTo-SecureString -Key $WapxKey
         $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-    
-        Invoke-Command -ComputerName $WugServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
+        Copy-Item "$LECertFolder\$CertName" -Destination "\\$WugServer\C$\temp"
+        Invoke-Command -ComputerName $WugServer -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -erroraction Stop -ScriptBlock {
             $CertThumbprint = $args[0]
             $CertName = $args[1]
-            $FullCertFolder = ($args[4]) + "\" + $CertName
+            $FullCertFolder = "C:\temp\_.ssw.com.au.pfx"
             $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
             Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
 
@@ -331,10 +172,10 @@ function Set-WugCert {
 
 <#
 .SYNOPSIS
-Set the new exported certificate to be the CRM Web Hook certificate.
+Copy the new exported certificate to WiFi controller/seq.
 
 .DESCRIPTION
-Set the new exported certificate to be the CRM Web Hook certificate.
+Copy the new exported certificate to WiFi controller/seq.
 
 .PARAMETER CertThumbprint
 The actual certificate thumbprint, location taken from the configuration file and imported to the function on runtime.
@@ -360,14 +201,15 @@ The password for the Wapx Server.
 .PARAMETER LogFile
 The location of the logfile.
 
-.PARAMETER CrmWebHookServer
-The name of the server that WUG website is sitting in.
+.PARAMETER ContServer
+The name of the server that WiFi controller/seq are on.
 
 .EXAMPLE
-PS> Set-CrmWebHookCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -CrmWebHookServer $CrmWebHookServer
+PS> Set-ContCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -ContServer $ContServer
 
 #>
-function Set-CrmWebHookCert {
+
+function Set-ContCert {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
@@ -383,302 +225,33 @@ function Set-CrmWebHookCert {
         [Parameter(Mandatory)]
         $WapxPass,
         [Parameter(Mandatory)]
-        $CertFolder,
-        [Parameter(Mandatory)]
-        $LogFile,
-        [Parameter(Mandatory)]
-        $CrmWebHookServer
-    )
-
-    try {
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-    
-        Invoke-Command -ComputerName $CrmWebHookServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
-            $CertThumbprint = $args[0]
-            $CertName = $args[1]
-            $FullCertFolder = ($args[4]) + "\" + $CertName
-            $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
-            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
-
-            netsh http delete sslcert hostnameport="CRMWebhook.ssw.com.au:443"
-            $guid1 = [guid]::NewGuid().ToString("B")
-            netsh http add sslcert hostnameport="CRMWebhook.ssw.com.au:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"          
-            $binding1 = Get-WebBinding -hostheader "CRMWebhook.ssw.com.au" -Port 443
-            $binding1.AddSslCertificate($CertThumbprint, "my")          
-        }
-        Write-Log -File $LogFile -Message "Exported certificate to $CrmWebHookServer, certificate thumbprint is $CertThumbprint..."
-    }
-    catch {
-        $Script:SetCrmWebHookCertError = $true
-        $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-CrmWebHookCert - $RecentError"
-    }
-}
-
-<#
-.SYNOPSIS
-Set the new exported certificate to be the Reports certificate.
-
-.DESCRIPTION
-Set the new exported certificate to be the Reports certificate.
-
-.PARAMETER CertThumbprint
-The actual certificate thumbprint, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertName
-The actual certificate name, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertPass
-The actual certificate password, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertKey
-The decryption key to be used on the exported pass.
-
-.PARAMETER CertFolder
-The root folder of the certificate.
-
-.PARAMETER WapxUser
-The username for the Wapx Server.
-
-.PARAMETER WapxPass
-The password for the Wapx Server.
-
-.PARAMETER LogFile
-The location of the logfile.
-
-.PARAMETER ReprotsServer
-The name of the server that Reports is sitting in.
-
-.EXAMPLE
-PS> 
-
-#>
-function Set-ReportsCert {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        $CertThumbprint,
-        [Parameter(Mandatory)]
-        $CertName,
-        [Parameter(Mandatory)]
-        $CertPass,
-        [Parameter(Mandatory)]
-        $CertKey,
-        [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
+        $WapxKey,
         [Parameter(Mandatory)]
         $CertFolder,
         [Parameter(Mandatory)]
         $LogFile,
         [Parameter(Mandatory)]
-        $ReportsServer
+        $ContServer
     )
 
     try {
         # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
+        $password = $WapxPass | ConvertTo-SecureString -Key $WapxKey
         $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-    
-        Invoke-Command -ComputerName $ReportsServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
+        Copy-Item "$LECertFolder\$CertName" -Destination "\\$ContServer\C$\temp"
+        Invoke-Command -ComputerName $ContServer -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -erroraction Stop -ScriptBlock {
             $CertThumbprint = $args[0]
             $CertName = $args[1]
-            $FullCertFolder = ($args[4]) + "\" + $CertName
+            $FullCertFolder = "C:\temp\_.ssw.com.au.pfx"
             $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
-            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
-
-            $guid1 = [guid]::NewGuid().ToString("B")
-            netsh http add sslcert hostnameport="*:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"          
-            $binding1 = Get-WebBinding -hostheader "*" -Port 443
-            $binding1.AddSslCertificate($CertThumbprint, "my")          
+            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd      
         }
-        Write-Log -File $LogFile -Message "Exported certificate to $ReportsServer, certificate thumbprint is $CertThumbprint..."
-    }
-    catch {
-        $Script:SetReportsCertError = $true
-        $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-ReportsCert - $RecentError"
-    }
-}
-
-<#
-.SYNOPSIS
-Set the new exported certificate to be the staging server certificate.
-
-.DESCRIPTION
-Set the new exported certificate to be the staging server certificate.
-
-.PARAMETER CertThumbprint
-The actual certificate thumbprint, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertName
-The actual certificate name, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertPass
-The actual certificate password, location taken from the configuration file and imported to the function on runtime.
-
-.PARAMETER CertKey
-The decryption key to be used on the exported pass.
-
-.PARAMETER CertFolder
-The root folder of the certificate.
-
-.PARAMETER WapxUser
-The username for the Wapx Server.
-
-.PARAMETER WapxPass
-The password for the Wapx Server.
-
-.PARAMETER LogFile
-The location of the logfile.
-
-.PARAMETER StagingServer
-The name of the server that Staging website is sitting in.
-
-.EXAMPLE
-PS> Set-StagingCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -StagingServer $StagingServer
-
-#>
-
-function Set-StagingCert {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        $CertThumbprint,
-        [Parameter(Mandatory)]
-        $CertName,
-        [Parameter(Mandatory)]
-        $CertPass,
-        [Parameter(Mandatory)]
-        $CertKey,
-        [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
-        [Parameter(Mandatory)]
-        $CertFolder,
-        [Parameter(Mandatory)]
-        $LogFile,
-        [Parameter(Mandatory)]
-        $StagingServer
-    )
-
-    try {
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-    
-        Invoke-Command -ComputerName $StagingServer -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
-            $CertThumbprint = $args[0]
-            $CertName = $args[1]
-            $FullCertFolder = ($args[4]) + "\" + $CertName
-            $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
-            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
-
-            $guid1 = [guid]::NewGuid().ToString("B")
-            #netsh http add sslcert hostnameport="*:443" certhash=$CertThumbprint certstorename=MY appid="$guid1"          
-            $binding1 = Get-WebBinding -Name "SSW Host Development" -Port 443
-            $binding1.AddSslCertificate($CertThumbprint, "my")          
-        }
-        Write-Log -File $LogFile -Message "Exported certificate to $StagingServer, certificate thumbprint is $CertThumbprint..."
+        Write-Log -File $LogFile -Message "Exported certificate to $ContServer, certificate thumbprint is $CertThumbprint..."
     }
     catch {
         $Script:SetStagingServerError = $true
         $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-StagingCert - $RecentError"
-    }
-}
-
-function Set-NPS1Cert {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        $CertThumbprint,
-        [Parameter(Mandatory)]
-        $CertName,
-        [Parameter(Mandatory)]
-        $CertPass,
-        [Parameter(Mandatory)]
-        $CertKey,
-        [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
-        [Parameter(Mandatory)]
-        $CertFolder,
-        [Parameter(Mandatory)]
-        $LogFile,
-        [Parameter(Mandatory)]
-        $NPS1Server
-    )
-
-    try {
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-    
-        Invoke-Command -ComputerName $NPS1Server -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
-            $CertThumbprint = $args[0]
-            $CertName = $args[1]
-            $FullCertFolder = ($args[4]) + "\" + $CertName
-            $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
-            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
-        
-        }
-        Write-Log -File $LogFile -Message "Exported certificate to $NPS1Server, certificate thumbprint is $CertThumbprint..."
-    }
-    catch {
-        $Script:SetNPS1ServerError = $true
-        $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-NPS1Cert - $RecentError"
-    }
-}
-
-function Set-NPS2Cert {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        $CertThumbprint,
-        [Parameter(Mandatory)]
-        $CertName,
-        [Parameter(Mandatory)]
-        $CertPass,
-        [Parameter(Mandatory)]
-        $CertKey,
-        [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
-        [Parameter(Mandatory)]
-        $CertFolder,
-        [Parameter(Mandatory)]
-        $LogFile,
-        [Parameter(Mandatory)]
-        $NPS2Server
-    )
-
-    try {
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $CertKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
-    
-        Invoke-Command -ComputerName $NPS2Server -Credential $Credentials -Authentication Credssp -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -ScriptBlock {
-            $CertThumbprint = $args[0]
-            $CertName = $args[1]
-            $FullCertFolder = ($args[4]) + "\" + $CertName
-            $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
-            Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
-        
-        }
-        Write-Log -File $LogFile -Message "Exported certificate to $NPS2Server, certificate thumbprint is $CertThumbprint..."
-    }
-    catch {
-        $Script:SetNPS2ServerError = $true
-        $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-NPS2Cert - $RecentError"
+        Write-Log -File $LogFile -Message "ERROR on function Set-ContCert - $RecentError"
     }
 }
 
@@ -696,10 +269,10 @@ PS> New-EmailMessage
 function New-EmailMessage {
     
     if ($Script:ExportSSWCertError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $WebServer - <strong>ERROR</strong> on exporting the renewed certificate | Check the log at $LogFile</li>"
+        $ErroredActions += "<li style=color:red;>&#9940; $CertServer - <strong>ERROR</strong> on exporting the certificate | Check the log at $LogFile</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>&#9989; $WebServer - <strong>SUCCESS</strong> on exporting the renewed certificate</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $CertServer - <strong>SUCCESS</strong> on exporting the certificate</li>"
     }
     if ($Script:SetWugCertError -eq $true) {
         $ErroredActions += "<li style=color:red;>&#9940; $WugServer - <strong>ERROR</strong> on setting the WUG certificate | Check the log at $LogFile</li>"
@@ -707,55 +280,24 @@ function New-EmailMessage {
     else {
         $CoolActions += "<li style=color:green;>&#9989; $WugServer - <strong>SUCCESS</strong> on setting the WUG certificate</li>"
     }
-    if ($Script:SetCrmWebHookCertError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $CrmWebHookServer - <strong>ERROR</strong> on setting the CRM Webhook certificate | Check the log at $LogFile</li>"
+    if ($Script:SetContServerError -eq $true) {
+        $ErroredActions += "<li style=color:red;>&#9940; $ContServer - <strong>ERROR</strong> on setting the Controller server certificate | Check the log at $LogFile</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>&#9989; $CrmWebHookServer - <strong>SUCCESS</strong> on setting the CRM Webhook certificate</li>"
-    }
-    if ($Script:SetReportsCertError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $ReportsServer - <strong>ERROR</strong> on setting the Reports certificate | Check the log at $LogFile</li>"
-    }
-    else {
-        $CoolActions += "<li style=color:green;>&#9989; $ReportsServer - <strong>SUCCESS</strong> on setting the Reports certificate</li>"
-    }
-    if ($Script:SetReverseProxyServerError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $ReverseProxyServer - <strong>ERROR</strong> on setting the Reverse Proxy certificate | Check the log at $LogFile</li>"
-    }
-    else {
-        $CoolActions += "<li style=color:green;>&#9989; $ReverseProxyServer - <strong>SUCCESS</strong> on setting the Reverse Proxy certificate</li>"
-    }
-    if ($Script:SetStagingServerError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $StagingServer - <strong>ERROR</strong> on setting the Staging server certificate | Check the log at $LogFile</li>"
-    }
-    else {
-        $CoolActions += "<li style=color:green;>&#9989; $StagingServer - <strong>SUCCESS</strong> on setting the Staging server certificate</li>"
-    } 
-    if ($Script:SetNPS1ServerError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $NPS1Server - <strong>ERROR</strong> on setting the NPS1 server certificate | Check the log at $LogFile</li>"
-    }
-    else {
-        $CoolActions += "<li style=color:green;>&#9989; $NPS1Server - <strong>SUCCESS</strong> on setting the NPS1 server certificate</li>"
-    }     
-    if ($Script:SetNPS2ServerError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $NPS2Server - <strong>ERROR</strong> on setting the NPS2 server certificate | Check the log at $LogFile</li>"
-    }
-    else {
-        $CoolActions += "<li style=color:green;>&#9989; $NPS2Server - <strong>SUCCESS</strong> on setting the NPS2 server certificate</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $ContServer - <strong>SUCCESS</strong> on setting the Controller server certificate</li>"
     }    
 
     $Script:bodyhtml = @"
     <div style='font-family:Calibri'>
-    <p>SSL Certificates are a pain and can be expensive. They can, however, be free if you leverage the power of <a href="https://letsencrypt.org/">Let's Encrypt</a>, which is a nonprofit Certificate Authority that provides free SSL certificates. <br>The only downside is that they need to be renewed every 3 months - SSW.CertExporter takes the pain out of it, used in conjunction with <a href="https://certifytheweb.com/">Certify The Web</a>, it can automatically export the renewed certificate and import and set them on your websites and applications in different servers.<p>As per rule: <a href="https://rules.ssw.com.au/do-you-use-free-or-paid-ssl-certificates">Do you use free or paid SSL certificates?</a></p>
-    
     <p><h3>To SSWSysAdmins,</h3>
+    <p>SSL Certificates are a pain and can be expensive. They can, however, be free if you leverage the power of <a href="https://letsencrypt.org/">Let's Encrypt</a>, which is a nonprofit Certificate Authority that provides free SSL certificates. <br>
+    The only downside is that they need to be renewed every 3 months - SSW.CertExporter takes the pain out of it, used in conjunction with <a href="https://www.win-acme.com/">win-acme</a>, it can automatically export the renewed certificate and import and set them on your websites and applications in different servers.<p>As per rule: <a href="https://rules.ssw.com.au/do-you-use-free-or-paid-ssl-certificates">Do you use free or paid SSL certificates?</a></p>
     
-    <p>If this email has been sent, it means <a href="https://certifytheweb.com/">Certify SSL Manager</a> has renewed the main SSW certificate in $WebServer, and SSW.CertExporter PowerShell script ran.
-    <p><h4>Certify SSL Manager did the following:</h4>
+    <p>If this email has been sent, it means <a href="https://www.win-acme.com/">win-acme</a> has renewed the SSW certificate in $CertServer, and SSW.CertExporter PowerShell script ran.
+    <p><h4>win-acme did the following:</h4>
     <ol>
-    <li>Sucessfully renewed ssw.com.au SSL certificate
-    <li>Set <a href="https://ssw.com.au">https://ssw.com.au</a> SSL certificate automatically</li>
-    <li>A <a href="https://docs.certifytheweb.com/docs/script-hooks#post-request-script-hooks">Post-Request Script Webhook</a> executed this SSW.CertExporter PowerShell script
+    <li>Sucessfully renewed the ssw.com.au SSL certificate
+    <li>A <a href="https://www.win-acme.com/reference/plugins/installation/script">Post-Request Script</a> executed this SSW.CertExporter PowerShell script
     </ol>
     <p><h4>SSW.CertExporter did the following:</h4><ol> 
 "@
@@ -765,9 +307,12 @@ function New-EmailMessage {
     </ol>
     <p><h4>Now manually action:</p></h4>
     <ol>
-    <li>Go to <a href="https://ssw.com.au">https://ssw.com.au</a> | Ensure certificate is renewed correctly
-    <ul><li>If not, go to $WebServer | Check Certify SSL Manager</li></ul>
-    <li>Go to ASDM | Follow this <a href="https://sswcom.sharepoint.com/:w:/r/SysAdmin/SharedDocuments/Procedures/HowTos-ChangeASDMCertificate.docx?d=w5a3cb2870d31441593d09dcb3391757e&csf=1&web=1&e=Bl9eW2">guide</a> | Install new certificate (can be found in $LECertFolder) </li>
+        <li>Go to ASDM | Follow this <a href="https://sswcom.sharepoint.com/:w:/r/SysAdmin/SharedDocuments/Procedures/HowTos-ChangeASDMCertificate.docx?d=w5a3cb2870d31441593d09dcb3391757e&csf=1&web=1&e=Bl9eW2">guide</a> | Install new certificate (can be found in $LECertFolder) </li>
+        <li>Go to $ContServer and install the certificate in Unifi and Seq</li>
+        <ul>
+            <li><a href = "https://sswcom.sharepoint.com/:w:/r/sites/SSWSysAdmins/Shared%20Documents/General/Certificates/HowTos-Install-Replace-SSL-Certificate-on-Unifi-Controller.docx?d=w6a26c0eaf9b64adaa41a98cd95da3294&csf=1&web=1&e=vuEDSU">Unifi instructions here</a></li>
+            <li><a href = "https://docs.datalust.co/docs/ssl">Seq instructions here</a></li>
+        </ul>
     </ol>
     
     <p>-- Powered by SSWSysAdmins.SSWCertExporter<br>
@@ -778,13 +323,8 @@ function New-EmailMessage {
 }
 
 # Let's run the commands one by one
-Export-SSWCert -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -CertThumbprint $LECertThumbprint -CertName $LECertName -LogFile $LogFile -CertPass (Get-Content $LECertPass) -WebServer $WebServer -WapxUser $WapxUser -WapxPass $WapxPass -LogModuleLocation $LogModuleLocation
-Set-ReverseProxyCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -ReverseProxyServer $ReverseProxyServer
-Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -WugServer $WugServer
-Set-CrmWebHookCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -CrmWebHookServer $CrmWebHookServer
-Set-ReportsCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -ReportsServer $ReportsServer
-Set-StagingCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -StagingServer $StagingServer
-Set-NPS1Cert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -NPS1Server $NPS1Server
-Set-NPS2Cert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -CertFolder $LECertFolder -LogFile $LogFile -NPS2Server $NPS2Server
+Get-Thumbprint -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -CertThumbprint $LECertThumbprint -CertName (Get-Content $LECertName) -LogFile $LogFile -CertPass (Get-Content $LECertPass)
+Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -WapxKey (Get-Content $WapxKey) -CertFolder $LECertFolder -LogFile $LogFile -WugServer $WugServer
+Set-ContCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -WapxKey (Get-Content $WapxKey) -CertFolder $LECertFolder -LogFile $LogFile -ContServer $ContServer
 New-EmailMessage
 Send-MailMessage -From $OriginEmail -to $TargetEmail -Subject "SSW.Certificates - Main SSW Certificate Renewed - Further manual action required" -Body $Script:bodyhtml -SmtpServer "ssw-com-au.mail.protection.outlook.com" -BodyAsHtml
