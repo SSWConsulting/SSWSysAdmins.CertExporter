@@ -26,9 +26,6 @@ $LECertThumbprint = $config.LECertThumbprint
 $LECertName = $config.LECertName
 $LECertPass = $config.LECertPass
 $LECertKey = $config.LECertKey
-$WapxUser = $config.WapxUser
-$WapxPass = $config.WapxPass
-$WapxKey = $config.WapxKey
 $LogFile = $config.LogFile
 $CertServer = $config.CertServer
 $WugServer = $config.WugServer
@@ -131,12 +128,6 @@ function Set-WugCert {
         [Parameter(Mandatory)]
         $CertKey,
         [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
-        [Parameter(Mandatory)]
-        $WapxKey,
-        [Parameter(Mandatory)]
         $CertFolder,
         [Parameter(Mandatory)]
         $LogFile,
@@ -145,14 +136,11 @@ function Set-WugCert {
     )
 
     try {
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $WapxKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
         Copy-Item "$LECertFolder\$CertName" -Destination "\\$WugServer\C$\temp"
         Invoke-Command -ComputerName $WugServer -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -erroraction Stop -ScriptBlock {
             $CertThumbprint = $args[0]
             $CertName = $args[1]
-            $FullCertFolder = "C:\temp\_.ssw.com.au.pfx"
+            $FullCertFolder = "C:\temp\ssw.com.au.pfx"
             $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
             Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd
 
@@ -221,12 +209,6 @@ function Set-ContCert {
         [Parameter(Mandatory)]
         $CertKey,
         [Parameter(Mandatory)]
-        $WapxUser,
-        [Parameter(Mandatory)]
-        $WapxPass,
-        [Parameter(Mandatory)]
-        $WapxKey,
-        [Parameter(Mandatory)]
         $CertFolder,
         [Parameter(Mandatory)]
         $LogFile,
@@ -235,14 +217,11 @@ function Set-ContCert {
     )
 
     try {
-        # Get the encrypted username and password files
-        $password = $WapxPass | ConvertTo-SecureString -Key $WapxKey
-        $credentials = New-Object System.Management.Automation.PsCredential($WapxUser, $password)
         Copy-Item "$LECertFolder\$CertName" -Destination "\\$ContServer\C$\temp"
         Invoke-Command -ComputerName $ContServer -ArgumentList $CertThumbprint, $CertName, $CertPass, $CertKey, $CertFolder -erroraction Stop -ScriptBlock {
             $CertThumbprint = $args[0]
             $CertName = $args[1]
-            $FullCertFolder = "C:\temp\_.ssw.com.au.pfx"
+            $FullCertFolder = "C:\temp\ssw.com.au.pfx"
             $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
             Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd      
         }
@@ -281,10 +260,10 @@ function New-EmailMessage {
         $CoolActions += "<li style=color:green;>&#9989; $WugServer - <strong>SUCCESS</strong> on setting the WUG certificate</li>"
     }
     if ($Script:SetContServerError -eq $true) {
-        $ErroredActions += "<li style=color:red;>&#9940; $ContServer - <strong>ERROR</strong> on setting the Controller server certificate | Check the log at $LogFile</li>"
+        $ErroredActions += "<li style=color:red;>&#9940; $ContServer - <strong>ERROR</strong> on copying the Controller server certificate | Check the log at $LogFile</li>"
     }
     else {
-        $CoolActions += "<li style=color:green;>&#9989; $ContServer - <strong>SUCCESS</strong> on setting the Controller server certificate</li>"
+        $CoolActions += "<li style=color:green;>&#9989; $ContServer - <strong>SUCCESS</strong> on copying the Controller server certificate</li>"
     }    
 
     $Script:bodyhtml = @"
@@ -324,7 +303,7 @@ function New-EmailMessage {
 
 # Let's run the commands one by one
 Get-Thumbprint -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -CertThumbprint $LECertThumbprint -CertName (Get-Content $LECertName) -LogFile $LogFile -CertPass (Get-Content $LECertPass)
-Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -WapxKey (Get-Content $WapxKey) -CertFolder $LECertFolder -LogFile $LogFile -WugServer $WugServer
-Set-ContCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -WapxUser $WapxUser -WapxPass $WapxPass -WapxKey (Get-Content $WapxKey) -CertFolder $LECertFolder -LogFile $LogFile -ContServer $ContServer
+Set-WugCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -LogFile $LogFile -WugServer $WugServer
+Set-ContCert -CertThumbprint (Get-Content $LECertThumbprint) -CertName (Get-Content $LECertName) -CertPass (Get-Content $LECertPass) -CertKey (get-content $LECertKey) -CertFolder $LECertFolder -LogFile $LogFile -ContServer $ContServer
 New-EmailMessage
 Send-MailMessage -From $OriginEmail -to $TargetEmail -Subject "SSW.Certificates - Main SSW Certificate Renewed - Further manual action required" -Body $Script:bodyhtml -SmtpServer "ssw-com-au.mail.protection.outlook.com" -BodyAsHtml
