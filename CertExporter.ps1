@@ -292,6 +292,12 @@ function New-EmailMessage {
             <li><a href = "https://sswcom.sharepoint.com/:w:/r/sites/SSWSysAdmins/Shared%20Documents/General/Certificates/HowTos-Install-Replace-SSL-Certificate-on-Unifi-Controller.docx?d=w6a26c0eaf9b64adaa41a98cd95da3294&csf=1&web=1&e=vuEDSU">Unifi instructions here</a></li>
             <li><a href = "https://docs.datalust.co/docs/ssl">Seq instructions here</a></li>
         </ul>
+        <li>Go to all Domain Controllers and check that the NPS certificate is current (i.e. not expiring in the next 30 days):</li>
+        <ul>
+            <li>Go to <b>NPS | Policies | Network Policies | Secure Wireless Connections | Constraints | Edit</b> and check the date</li>
+            <li>Select a new certificate if required</li>
+            <li>Click <b>OK | OK</b> (even if the date was already OK)</li>
+        </ul>
     </ol>
     
     <p>-- Powered by SSWSysAdmins.SSWCertExporter<br>
