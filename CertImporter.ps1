@@ -45,6 +45,7 @@ ForEach ($DC in $DCs) {
             $certStoreLocation = $args[1]
             $password = $args[2]
             Import-PfxCertificate -FilePath $filePath -CertStoreLocation $certStoreLocation -Password $password
+            Restart-Service -Name "IAS"
         }
         Write-Output "$(Get-TimeStamp) Certificate successfully imported on $DC" | Out-File $logLocation -Append
     }
