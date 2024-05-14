@@ -1,4 +1,5 @@
-﻿### This script imports our certificate to all DCs, to be userd by NPS (RADIUS auth for WiFi).
+﻿### No longer in use.
+### This script imports our certificate to all DCs, to be used by NPS (RADIUS auth for WiFi).
 
 # Importing the configuration file
 $config = Import-PowerShellDataFile $PSScriptRoot\Config.PSD1
