@@ -30,6 +30,7 @@ $LogFile = $config.LogFile
 $CertServer = $config.CertServer
 $WugServer = $config.WugServer
 $ContServer = $Config.ContServer
+$RDServer = $Config.RDServer
 $OriginEmail = $config.OriginEmail
 $TargetEmail = $config.TargetEmail
 $LogModuleLocation = $config.LogModuleLocation
@@ -44,8 +45,7 @@ $Script:SetWugCertError = $false
 $Script:SetContServerError = $false
 
 # Get the new certificate's thumbprint
-Function Get-Thumbprint
-{
+Function Get-Thumbprint {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
@@ -61,16 +61,14 @@ Function Get-Thumbprint
         [Parameter(Mandatory)]
         $LogFile
     )
-    Try
-    {
+    Try {
         $item = get-childitem -path Cert:\LocalMachine\My
         $CurrentDate = Get-Date -Format "dd-MM-yyyy"
         $item = $item | where-object { $_.Issuer -eq "CN=R3, O=Let's Encrypt, C=US" -and $_.NotBefore.ToString("dd-MM-yyyy") -eq $CurrentDate }
         Set-Content -Path $CertThumbprint -Value $item.Thumbprint -ErrorAction Stop
         Write-Log -File $LogFile -Message "New Thumbprint written to $CertThumbprint"
     }
-    Catch
-    {
+    Catch {
         $Script:GetThumbprintError = $true
         $RecentError = $Error[0]
         Write-Log -File $LogFile -Message "ERROR on function Get-Thumbprint - $RecentError"
@@ -298,6 +296,12 @@ function New-EmailMessage {
             <li>Select a new certificate if required</li>
             <li>Click <b>OK | OK</b> (even if the date was already OK)</li>
         </ul>
+        </ul>
+        <li>Go to $RDServer and change the Remote Desktop Gateway certificate for all 4 roles
+        <ul>
+            <li><a href="https://sswcom.sharepoint.com/:w:/r/sites/SSWSysAdmins/Shared%20Documents/General/CyberSecurity/HowTos-Remote-Desktop-Gateway.docx?d=wa13f5559789e4a418a7caea0eb8a0a87&csf=1&web=1&e=AXPuJm">RD Gateway instructions here | Section "Certificate Management"</a></li>
+        </ul>
+        </li>
     </ol>
     
     <p>-- Powered by SSWSysAdmins.SSWCertExporter<br>
