@@ -36,7 +36,7 @@ $TargetEmail = $config.TargetEmail
 $LogModuleLocation = $config.LogModuleLocation
 
 # Importing the SSW Write-Log module
-Import-Module -Name $LogModuleLocation
+Import-Module -Name Write-Log
 
 # Creating error variables that will be used at the end
 $Script:GetThumbprintError = $false
@@ -64,14 +64,14 @@ Function Get-Thumbprint {
     Try {
         $item = get-childitem -path Cert:\LocalMachine\My
         $CurrentDate = Get-Date -Format "dd-MM-yyyy"
-        $item = $item | where-object { $_.Issuer -eq "CN=R3, O=Let's Encrypt, C=US" -and $_.NotBefore.ToString("dd-MM-yyyy") -eq $CurrentDate }
+        $item = $item | where-object { $_.Issuer -eq "CN=R11, O=Let's Encrypt, C=US" -and $_.NotBefore.ToString("dd-MM-yyyy") -eq $CurrentDate }
         Set-Content -Path $CertThumbprint -Value $item.Thumbprint -ErrorAction Stop
-        Write-Log -File $LogFile -Message "New Thumbprint written to $CertThumbprint"
+        Write-Log -errorLevel SUCCESS -Message "New Thumbprint written to $CertThumbprint"
     }
     Catch {
         $Script:GetThumbprintError = $true
         $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Get-Thumbprint - $RecentError"
+        Write-Log -errorLevel ERROR $LogFile -Message "ERROR on function Get-Thumbprint - $RecentError"
     }
 }
 
@@ -147,12 +147,12 @@ function Set-WugCert {
             $binding1 = Get-WebBinding -hostheader "*" -Port 443
             $binding1.AddSslCertificate($CertThumbprint, "my")          
         }
-        Write-Log -File $LogFile -Message "Exported certificate to $WugServer, certificate thumbprint is $CertThumbprint..."
+        Write-Log -errorLevel SUCCESS -Message "Exported certificate to $WugServer, certificate thumbprint is $CertThumbprint..."
     }
     catch {
         $Script:SetWugCertError = $true
         $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-WugCert - $RecentError"
+        Write-Log -errorLevel ERROR -Message "ERROR on function Set-WugCert - $RecentError"
     }
 }
 
@@ -223,12 +223,12 @@ function Set-ContCert {
             $mypwd = $args[2] | ConvertTo-SecureString -Key $args[3]
             Import-PfxCertificate -FilePath $FullCertFolder -CertStoreLocation Cert:\LocalMachine\My -Password $mypwd      
         }
-        Write-Log -File $LogFile -Message "Exported certificate to $ContServer, certificate thumbprint is $CertThumbprint..."
+        Write-Log -errorLevel SUCCESS -Message "Exported certificate to $ContServer, certificate thumbprint is $CertThumbprint..."
     }
     catch {
         $Script:SetStagingServerError = $true
         $RecentError = $Error[0]
-        Write-Log -File $LogFile -Message "ERROR on function Set-ContCert - $RecentError"
+        Write-Log -errorLevel ERROR -Message "ERROR on function Set-ContCert - $RecentError"
     }
 }
 
